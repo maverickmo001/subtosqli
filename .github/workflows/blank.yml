@@ -28,16 +28,15 @@ jobs:
           sudo apt-get update > /dev/null 2>&1
           sudo apt-get install -y jq unzip > /dev/null 2>&1
 
-      - name: Install Latest Nuclei (Fixes -dast flag)
+      - name: Install Nuclei v3.3.0 (Supports -dast)
         run: |
-          # Automatically fetch the latest release version to ensure -dast is supported
-          LATEST_VERSION=$(curl -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest | grep "tag_name" | awk -F'"' '{print $4}')
-          wget -q "https://github.com/projectdiscovery/nuclei/releases/download/${LATEST_VERSION}/nuclei_${LATEST_VERSION}_linux_amd64.zip" -O nuclei.zip
+          # Hardcoded to v3.3.0 to avoid GitHub API rate-limit crashes
+          wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v3.3.0/nuclei_3.3.0_linux_amd64.zip" -O nuclei.zip
           unzip -qo nuclei.zip -d nuclei_temp
           sudo mv nuclei_temp/nuclei /usr/local/bin/
           rm -rf nuclei.zip nuclei_temp
           
-          # Update templates
+          # Update official templates
           nuclei -ut > /dev/null 2>&1
 
       - name: Install ProjectDiscovery Tools
@@ -80,7 +79,6 @@ jobs:
       - name: Step 3 - Katana (Get ALL Params)
         run: |
           if [ ! -s "live_urls.txt" ]; then exit 0; fi
-          # Crawl and get every single parameter found
           cat live_urls.txt | katana -d 3 -jc -aff -silent -o katana_all_params.txt
           touch katana_all_params.txt
 
@@ -93,7 +91,6 @@ jobs:
             exit 0
           fi
           
-          # Run on ALL params with expanded tags
           nuclei -l katana_all_params.txt -tags sql,sqli,injection -severity critical,high,medium -silent -o nuclei_standard_results.txt
           touch nuclei_standard_results.txt
           
@@ -112,7 +109,6 @@ jobs:
         run: |
           if [ ! -s "katana_all_params.txt" ]; then exit 0; fi
           
-          # Run on ALL params using the headless -dast flag
           nuclei -l katana_all_params.txt -dast -silent -o nuclei_dast_results.txt
           touch nuclei_dast_results.txt
           
