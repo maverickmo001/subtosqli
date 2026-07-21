@@ -1,4 +1,4 @@
-name: SQLi & DAST Sniper Pipeline
+name: SQLi & XSS Injection Sniper
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
         type: string
 
 jobs:
-  sqli-dast-sniper:
+  injection-sniper:
     runs-on: ubuntu-latest
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -28,15 +28,13 @@ jobs:
           sudo apt-get update > /dev/null 2>&1
           sudo apt-get install -y jq unzip > /dev/null 2>&1
 
-      - name: Install Nuclei v3.3.0 (Supports -dast)
+      - name: Install Stable Nuclei (Prevents Memory Panics)
         run: |
-          # Hardcoded to v3.3.0 to avoid GitHub API rate-limit crashes
+          # Hardcoded stable release v3.3.0 to prevent go-install goroutine panics
           wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v3.3.0/nuclei_3.3.0_linux_amd64.zip" -O nuclei.zip
           unzip -qo nuclei.zip -d nuclei_temp
           sudo mv nuclei_temp/nuclei /usr/local/bin/
           rm -rf nuclei.zip nuclei_temp
-          
-          # Update official templates
           nuclei -ut > /dev/null 2>&1
 
       - name: Install ProjectDiscovery Tools
@@ -60,7 +58,7 @@ jobs:
           TARGET_COUNT=$(wc -l < targets.txt | xargs)
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=🎯 SQLi & DAST Sniper Starting for ${TARGET_COUNT} targets..." || true
+            --data-urlencode "text=🎯 Injection Sniper Starting for ${TARGET_COUNT} targets..." || true
 
       - name: Step 1 - Subfinder
         run: |
@@ -82,7 +80,7 @@ jobs:
           cat live_urls.txt | katana -d 3 -jc -aff -silent -o katana_all_params.txt
           touch katana_all_params.txt
 
-      - name: Step 4 - Nuclei Standard Injection Scanner
+      - name: Step 4 - Nuclei (SQLi + XSS + Injections)
         run: |
           if [ ! -s "katana_all_params.txt" ]; then
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
@@ -91,43 +89,27 @@ jobs:
             exit 0
           fi
           
-          nuclei -l katana_all_params.txt -tags sql,sqli,injection -severity critical,high,medium -silent -o nuclei_standard_results.txt
-          touch nuclei_standard_results.txt
+          # -c 25 limits threads to prevent GitHub Actions Out-Of-Memory crashes
+          # -tags covers SQLi, standard injections, and XSS
+          nuclei -l katana_all_params.txt -tags sql,sqli,injection,xss,reflected-xss,dom-xss -severity critical,high,medium -c 25 -silent -o nuclei_results.txt
+          touch nuclei_results.txt
           
-          if [ -s "nuclei_standard_results.txt" ]; then
+          if [ -s "nuclei_results.txt" ]; then
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
               -F chat_id="${TELEGRAM_CHAT_ID}" \
-              -F document="@nuclei_standard_results.txt" \
-              -F caption="🚨 NUCLEI STANDARD: SQL/Injection Vulnerabilities Found!" || true
+              -F document="@nuclei_results.txt" \
+              -F caption="🚨 NUCLEI: SQLi / XSS / Injection Vulnerabilities Found!" || true
           else
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
               -d chat_id="${TELEGRAM_CHAT_ID}" \
-              --data-urlencode "text=✅ Nuclei Standard: No SQL/Injection vulnerabilities found." || true
-          fi
-
-      - name: Step 5 - Nuclei DAST (Headless Scanner)
-        run: |
-          if [ ! -s "katana_all_params.txt" ]; then exit 0; fi
-          
-          nuclei -l katana_all_params.txt -dast -silent -o nuclei_dast_results.txt
-          touch nuclei_dast_results.txt
-          
-          if [ -s "nuclei_dast_results.txt" ]; then
-            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
-              -F chat_id="${TELEGRAM_CHAT_ID}" \
-              -F document="@nuclei_dast_results.txt" \
-              -F caption="🧠 NUCLEI DAST: Headless XSS/DOM Vulnerabilities Found!" || true
-          else
-            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-              -d chat_id="${TELEGRAM_CHAT_ID}" \
-              --data-urlencode "text=✅ Nuclei DAST: No headless vulnerabilities found." || true
+              --data-urlencode "text=✅ Nuclei finished. No vulnerabilities found." || true
           fi
 
       - name: Upload All Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sqli-dast-run-${{ github.run_id }}
+          name: injection-sniper-run-${{ github.run_id }}
           path: |
             *.txt
           retention-days: 7
