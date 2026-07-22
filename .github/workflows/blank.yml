@@ -12,7 +12,7 @@ on:
         required: false
         type: string
       template_names:
-        description: 'Template name or folder (e.g., far.yaml or danielfolder). Use / for multiple.'
+        description: 'Type "all" to scan everything, or name/folder (e.g., far.yaml/danielfolder)'
         required: true
         type: string
 
@@ -91,38 +91,48 @@ jobs:
             exit 0
           fi
           
-          # Smart parser to handle files and folders separated by /
           TEMPLATES_INPUT="${{ github.event.inputs.template_names }}"
           TEMPLATES_ARGS=""
           FOUND=0
           
-          IFS='/' read -ra ITEMS <<< "$TEMPLATES_INPUT"
-          for item in "${ITEMS[@]}"; do
-            # Remove whitespace
-            item=$(echo "$item" | xargs)
-            if [ -z "$item" ]; then continue; fi
+          # CHECK IF USER TYPED "all"
+          if [ "$TEMPLATES_INPUT" = "all" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text="📂 Scanning repo for ALL templates..." || true
+              
+            # Find all yaml/yml files, but EXCLUDE .github/ workflows so Nuclei doesn't crash
+            while IFS= read -r tmpl; do
+              TEMPLATES_ARGS="$TEMPLATES_ARGS -t $tmpl"
+              FOUND=1
+            done < <(find . -type f \( -name "*.yaml" -o -name "*.yml" \) ! -path "./.github/*")
             
-            # Check if it's a direct file
-            if [ -f "$item" ]; then
-              TEMPLATES_ARGS="$TEMPLATES_ARGS -t $item"
-              FOUND=1
-            # Check if they forgot .yaml or .yml extension
-            elif [ -f "${item}.yaml" ]; then
-              TEMPLATES_ARGS="$TEMPLATES_ARGS -t ${item}.yaml"
-              FOUND=1
-            elif [ -f "${item}.yml" ]; then
-              TEMPLATES_ARGS="$TEMPLATES_ARGS -t ${item}.yml"
-              FOUND=1
-            # Check if it's a folder
-            elif [ -d "$item" ]; then
-              TEMPLATES_ARGS="$TEMPLATES_ARGS -t ${item}/"
-              FOUND=1
-            else
-              curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-                -d chat_id="${TELEGRAM_CHAT_ID}" \
-                --data-urlencode "text=⚠️ Could not find template or folder: $item" || true
-            fi
-          done
+          # ELSE, PARSE SPECIFIC NAMES/FOLDERS
+          else
+            IFS='/' read -ra ITEMS <<< "$TEMPLATES_INPUT"
+            for item in "${ITEMS[@]}"; do
+              item=$(echo "$item" | xargs)
+              if [ -z "$item" ]; then continue; fi
+              
+              if [ -f "$item" ]; then
+                TEMPLATES_ARGS="$TEMPLATES_ARGS -t $item"
+                FOUND=1
+              elif [ -f "${item}.yaml" ]; then
+                TEMPLATES_ARGS="$TEMPLATES_ARGS -t ${item}.yaml"
+                FOUND=1
+              elif [ -f "${item}.yml" ]; then
+                TEMPLATES_ARGS="$TEMPLATES_ARGS -t ${item}.yml"
+                FOUND=1
+              elif [ -d "$item" ]; then
+                TEMPLATES_ARGS="$TEMPLATES_ARGS -t ${item}/"
+                FOUND=1
+              else
+                curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                  -d chat_id="${TELEGRAM_CHAT_ID}" \
+                  --data-urlencode "text=⚠️ Could not find template or folder: $item" || true
+              fi
+            done
+          fi
           
           if [ "$FOUND" -eq 0 ]; then
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
@@ -131,8 +141,7 @@ jobs:
             exit 0
           fi
           
-          # Run Nuclei using ONLY the dynamically built -t arguments
-          echo "Running Nuclei with: $TEMPLATES_ARGS"
+          # Run Nuclei using the dynamically built arguments
           nuclei -l katana_all_params.txt $TEMPLATES_ARGS -c 25 -silent -o nuclei_results.txt
           touch nuclei_results.txt
           
